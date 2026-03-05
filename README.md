@@ -2,6 +2,10 @@
 
 A custom Lovelace card for Home Assistant that displays your Radarr and Sonarr download queues and libraries in a beautiful, modern interface.
 
+| Queue Mode | Library Mode |
+|:---:|:---:|
+| ![Queue Mode](.github/assets/queue-mode.png) | ![Library Mode](.github/assets/library-mode.png) |
+
 ## Features
 
 - **Radarr & Sonarr Support**: Use one or both - combine into a single unified queue
@@ -102,9 +106,13 @@ show_refresh_button: true
 - Displays download progress, status, download client, and tracker
 - Sonarr items show episode info (e.g. S01E01 · The Pilot)
 
+![Queue Mode](.github/assets/queue-mode.png)
+
 **Library Mode** (`view_mode: library`):
 - Shows items in your library
 - Displays availability status, year, and file size
+
+![Library Mode](.github/assets/library-mode.png)
 
 ### Finding Your Entry ID
 
