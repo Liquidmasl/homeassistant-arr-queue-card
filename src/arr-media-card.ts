@@ -2,9 +2,14 @@ import { HomeAssistant, LovelaceCard, LovelaceCardConfig } from './types';
 import { styles } from './styles';
 import './editor';
 
-interface RadarrQueueCardConfig extends LovelaceCardConfig {
-  service?: string;
-  entry_id?: string;
+interface ArrInstanceConfig {
+  entry_id: string;
+}
+
+interface ArrQueueCardConfig extends LovelaceCardConfig {
+  radarr?: ArrInstanceConfig;
+  sonarr?: ArrInstanceConfig;
+  view_mode?: 'queue' | 'library';
   max_items?: number;
   items_per_page?: number;
   show_fanart?: boolean;
@@ -14,13 +19,10 @@ interface RadarrQueueCardConfig extends LovelaceCardConfig {
   show_tracker?: boolean;
   show_download_client?: boolean;
   show_refresh_button?: boolean;
-  view_mode?: 'queue' | 'library';
-  show_search?: boolean;
 }
 
-interface MovieQueue {
+interface QueueItem {
   id: number;
-  movie_id: number;
   title: string;
   download_title: string;
   progress: string;
@@ -36,31 +38,50 @@ interface MovieQueue {
     poster: string;
     fanart: string;
   };
+  // Sonarr-specific
+  episode_identifier?: string;
+  episode_title?: string;
+  season_number?: number;
+  episode_number?: number;
+  quality?: string;
+  is_season_pack?: boolean;
+  episode_count?: number;
+  episode_range?: string;
+  // Source tracking
+  _source?: 'radarr' | 'sonarr';
 }
 
-interface MovieLibrary {
+interface LibraryItem {
   id: number;
   title: string;
   year: number;
-  tmdb_id: number;
-  imdb_id: string;
   status: string;
   monitored: boolean;
   has_file: boolean;
   size_on_disk: number;
   path: string;
-  movie_file_count: number;
   images: {
     poster: string;
     fanart: string;
   };
+  _source?: 'radarr' | 'sonarr';
 }
 
-type MediaItem = MovieQueue | MovieLibrary;
+type MediaItem = QueueItem | LibraryItem;
+
+const SERVICE_MAP: Record<string, Record<string, string>> = {
+  radarr: { queue: 'radarr.get_queue', library: 'radarr.get_movies' },
+  sonarr: { queue: 'sonarr.get_queue', library: 'sonarr.get_series' },
+};
+
+const RESPONSE_KEY_MAP: Record<string, Record<string, string>> = {
+  radarr: { queue: 'movies', library: 'movies' },
+  sonarr: { queue: 'shows', library: 'series' },
+};
 
 
 class RadarrQueueCard extends HTMLElement implements LovelaceCard {
-  private _config!: RadarrQueueCardConfig;
+  private _config!: ArrQueueCardConfig;
   private _hass!: HomeAssistant;
   private _content!: HTMLDivElement;
   private _items: MediaItem[] = [];
@@ -73,12 +94,11 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   private _searchQuery = '';
 
   static getConfigElement() {
-    return document.createElement('radarr-queue-card-editor');
+    return document.createElement('arr-media-card-editor');
   }
 
   static getStubConfig() {
     return {
-      entry_id: '',
       view_mode: 'queue',
       max_items: 50,
       items_per_page: 5,
@@ -89,7 +109,6 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       show_tracker: true,
       show_download_client: true,
       show_refresh_button: false,
-      show_search: false,
     };
   }
 
@@ -97,32 +116,27 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     const oldHass = this._hass;
     this._hass = hass;
 
-    // Initial fetch or if hass just became available
     if (!oldHass && hass) {
       this._fetchData();
     }
 
-    // Only render once initially, then let _fetchData handle updates
     if (!this._rendered) {
       this._render();
     }
   }
 
-  setConfig(config: RadarrQueueCardConfig) {
+  setConfig(config: ArrQueueCardConfig) {
     this._config = {
       view_mode: 'queue',
-      title: 'Radarr Queue',
       max_items: 50,
       items_per_page: 5,
       show_fanart: true,
       compact_mode: false,
       refresh_interval: 60,
-      show_title: false,
       show_count: false,
       show_tracker: true,
       show_download_client: true,
       show_refresh_button: false,
-      show_search: false,
       ...config,
     };
   }
@@ -143,7 +157,6 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       this.shadowRoot!.appendChild(this._content);
     }
 
-    // Start refresh interval
     this._startRefreshInterval();
   }
 
@@ -166,11 +179,41 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     }
   }
 
-  private _getServiceForViewMode(): string {
-    if (this._config.service) {
-      return this._config.service;
+  private _getEnabledApps(): Array<{ app: 'radarr' | 'sonarr'; entry_id: string }> {
+    const apps: Array<{ app: 'radarr' | 'sonarr'; entry_id: string }> = [];
+    if (this._config.radarr?.entry_id) {
+      apps.push({ app: 'radarr', entry_id: this._config.radarr.entry_id });
     }
-    return this._config.view_mode === 'library' ? 'radarr.get_movies' : 'radarr.get_queue';
+    if (this._config.sonarr?.entry_id) {
+      apps.push({ app: 'sonarr', entry_id: this._config.sonarr.entry_id });
+    }
+    return apps;
+  }
+
+  private async _fetchFromApp(app: 'radarr' | 'sonarr', entryId: string): Promise<MediaItem[]> {
+    const viewMode = this._config.view_mode || 'queue';
+    const serviceName = SERVICE_MAP[app]?.[viewMode];
+    if (!serviceName) return [];
+
+    const [domain, service] = serviceName.split('.');
+    const responseKey = RESPONSE_KEY_MAP[app]?.[viewMode];
+
+    const response = await this._hass.callService(
+      domain,
+      service,
+      { entry_id: entryId },
+      undefined,
+      undefined,
+      true
+    );
+
+    const data = response?.response?.[responseKey];
+    if (!data) return [];
+
+    const items = Object.values(data) as MediaItem[];
+    // Tag each item with its source
+    items.forEach((item) => { (item as any)._source = app; });
+    return items;
   }
 
   private async _fetchData() {
@@ -178,44 +221,38 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       return;
     }
 
-    // Throttle requests (minimum 5 seconds between fetches)
     const now = Date.now();
     if (now - this._lastFetch < 5000) {
       return;
     }
     this._lastFetch = now;
 
-    const serviceName = this._getServiceForViewMode();
-    const [domain, service] = serviceName.split('.');
+    const apps = this._getEnabledApps();
+    if (apps.length === 0) {
+      this._loading = false;
+      this._error = 'No Radarr or Sonarr instance configured';
+      this._items = [];
+      this._render();
+      return;
+    }
 
     try {
       this._loading = true;
       this._error = null;
       this._render();
 
-      // callService with 6th parameter true to get response
-      const response = await this._hass.callService(
-        domain,
-        service,
-        { entry_id: this._config.entry_id },
-        undefined,  // target
-        undefined,  // notifyOnError
-        true        // returnResponse
+      // Fetch from all enabled apps in parallel
+      const results = await Promise.all(
+        apps.map(({ app, entry_id }) => this._fetchFromApp(app, entry_id))
       );
 
-      // Response is wrapped: { context: {...}, response: { movies: {...} } }
-      const movies = response?.response?.movies;
-      if (movies) {
-        this._items = Object.values(movies).slice(0, this._config.max_items) as MediaItem[];
-      } else {
-        this._items = [];
-      }
-
+      // Merge and limit
+      this._items = results.flat().slice(0, this._config.max_items) as MediaItem[];
       this._loading = false;
       this._error = null;
     } catch (err) {
       this._loading = false;
-      this._error = err instanceof Error ? err.message : 'Failed to fetch queue';
+      this._error = err instanceof Error ? err.message : 'Failed to fetch data';
       this._items = [];
     }
 
@@ -235,6 +272,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
 
   private _getStatusClass(status: string, downloadState: string): string {
     if (status === 'paused') return 'status-paused';
+    if (status === 'warning') return 'status-paused';
     if (downloadState === 'downloading') return 'status-downloading';
     if (downloadState === 'importPending') return 'status-importing';
     return 'status-unknown';
@@ -242,6 +280,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
 
   private _getStatusIcon(status: string, downloadState: string): string {
     if (status === 'paused') return 'mdi:pause-circle';
+    if (status === 'warning') return 'mdi:alert';
     if (downloadState === 'downloading') return 'mdi:download';
     if (downloadState === 'importPending') return 'mdi:import';
     return 'mdi:help-circle';
@@ -252,6 +291,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   }
 
   private _handleRefreshClick() {
+    this._lastFetch = 0; // Reset throttle so refresh works immediately
     this._fetchData();
   }
 
@@ -276,12 +316,14 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     }
     const query = this._searchQuery.toLowerCase().trim();
     return this._items.filter((item) => {
-      const title = item.title.toLowerCase();
-      if (title.includes(query)) return true;
+      if (item.title.toLowerCase().includes(query)) return true;
 
-      // For library items, also search by year
-      if (!this._isQueueItem(item)) {
-        const libraryItem = item as MovieLibrary;
+      if (this._isQueueItem(item)) {
+        if (item.episode_title?.toLowerCase().includes(query)) return true;
+        if (item.episode_identifier?.toLowerCase().includes(query)) return true;
+        if (item.episode_range?.toLowerCase().includes(query)) return true;
+      } else {
+        const libraryItem = item as LibraryItem;
         if (libraryItem.year && libraryItem.year.toString().includes(query)) return true;
       }
       return false;
@@ -302,7 +344,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     return filteredItems.slice(start, end);
   }
 
-  private _isQueueItem(item: MediaItem): item is MovieQueue {
+  private _isQueueItem(item: MediaItem): item is QueueItem {
     return 'progress' in item && 'download_client' in item;
   }
 
@@ -310,10 +352,9 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     const input = e.target as HTMLInputElement;
     const cursorPosition = input.selectionStart;
     this._searchQuery = input.value;
-    this._currentPage = 0; // Reset to first page when searching
+    this._currentPage = 0;
     this._render();
 
-    // Restore focus and cursor position after render
     requestAnimationFrame(() => {
       const newInput = this._content.querySelector('.search-input') as HTMLInputElement;
       if (newInput) {
@@ -323,6 +364,38 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
         }
       }
     });
+  }
+
+  private _renderHeader(disabled = false): string {
+    const countHtml = this._config.show_count
+      ? `<span class="count">${this._getFilteredItems().length} item${this._getFilteredItems().length !== 1 ? 's' : ''}</span>`
+      : '';
+
+    const refreshBtnHtml = this._config.show_refresh_button
+      ? `<button class="refresh-btn ${this._loading ? 'loading' : ''}" title="Refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>`
+      : '';
+
+    const hasActions = this._config.show_count || this._config.show_refresh_button;
+
+    return `
+      <div class="card-header">
+        <div class="search-container">
+          <ha-icon icon="mdi:magnify" class="search-icon"></ha-icon>
+          <input type="text" class="search-input" placeholder="Search..." value="${this._searchQuery}" ${disabled ? 'disabled' : ''} />
+          ${this._searchQuery ? `
+            <button class="search-clear" title="Clear">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          ` : ''}
+        </div>
+        ${hasActions ? `
+          <div class="header-actions">
+            ${countHtml}
+            ${refreshBtnHtml}
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
   private _render() {
@@ -335,11 +408,10 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     if (this._loading && this._items.length === 0) {
       this._content.innerHTML = `
         <ha-card>
-          <div class="card-header">
-          </div>
+          ${this._renderHeader(true)}
           <div class="empty-state">
             <ha-icon icon="mdi:loading" class="spin"></ha-icon>
-            <span>Loading queue...</span>
+            <span>Loading...</span>
           </div>
         </ha-card>
       `;
@@ -350,11 +422,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     if (this._error) {
       this._content.innerHTML = `
         <ha-card>
-          <div class="card-header">
-            <button class="refresh-btn" title="Refresh">
-              <ha-icon icon="mdi:refresh"></ha-icon>
-            </button>
-          </div>
+          ${this._renderHeader(true)}
           <div class="empty-state error">
             <ha-icon icon="mdi:alert-circle"></ha-icon>
             <span>${this._error}</span>
@@ -366,19 +434,14 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     }
 
     // Empty state
-    const isLibraryMode = this._config.view_mode === 'library';
-    const emptyMessage = isLibraryMode ? 'No movies in library' : 'No movies in queue';
-    const emptyIcon = isLibraryMode ? 'mdi:movie-open' : 'mdi:movie-check';
-
     if (this._items.length === 0) {
+      const isLibraryMode = this._config.view_mode === 'library';
+      const emptyMessage = isLibraryMode ? 'No items in library' : 'No items in queue';
+      const emptyIcon = isLibraryMode ? 'mdi:movie-open' : 'mdi:movie-check';
+
       this._content.innerHTML = `
         <ha-card>
-          <div class="card-header">
-            
-            <button class="refresh-btn" title="Refresh">
-              <ha-icon icon="mdi:refresh"></ha-icon>
-            </button>
-          </div>
+          ${this._renderHeader(true)}
           <div class="empty-state">
             <ha-icon icon="${emptyIcon}"></ha-icon>
             <span>${emptyMessage}</span>
@@ -395,8 +458,8 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       this._currentPage = totalPages - 1;
     }
 
-    // Get current page of items
     const pagedItems = this._getPagedItems();
+    const filteredItems = this._getFilteredItems();
 
     // Render items
     const itemsHtml = pagedItems.map((item) => {
@@ -407,7 +470,6 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
         : '';
 
       if (this._isQueueItem(item)) {
-        // Queue item rendering
         const progress = this._parseProgress(item.progress);
         const statusClass = this._getStatusClass(item.status, item.tracked_download_state);
         const statusIcon = this._getStatusIcon(item.status, item.tracked_download_state);
@@ -427,14 +489,27 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
           </span>
         ` : '';
 
+        // Episode subtitle for sonarr items
+        let subtitleHtml = '';
+        if (item.episode_identifier) {
+          if (item.is_season_pack) {
+            // Season pack: show identifier (e.g. "S02 (24 episodes)") without individual episode title
+            subtitleHtml = `<div class="item-subtitle">${item.episode_identifier}</div>`;
+          } else {
+            // Individual episode: show identifier + episode title
+            subtitleHtml = `<div class="item-subtitle">${item.episode_identifier}${item.episode_title ? ` · ${item.episode_title}` : ''}</div>`;
+          }
+        }
+
         return `
-          <div class="movie-item ${isCompact ? 'compact' : ''}" style="${backgroundStyle}">
-            <div class="movie-poster">
+          <div class="media-item ${isCompact ? 'compact' : ''}" style="${backgroundStyle}">
+            <div class="item-poster">
               <img src="${item.images?.poster || ''}" alt="${item.title}" loading="lazy" />
             </div>
-            <div class="movie-info">
-              <div class="movie-title">${item.title}</div>
-              <div class="movie-meta">
+            <div class="item-info">
+              <div class="item-title">${item.title}</div>
+              ${subtitleHtml}
+              <div class="item-meta">
                 <span class="status-badge ${statusClass}">
                   <ha-icon icon="${statusIcon}"></ha-icon>
                   ${item.status}
@@ -457,20 +532,19 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
           </div>
         `;
       } else {
-        // Library item rendering
-        const libraryItem = item as MovieLibrary;
+        const libraryItem = item as LibraryItem;
         const statusClass = libraryItem.has_file ? 'status-available' : (libraryItem.monitored ? 'status-monitored' : 'status-unmonitored');
         const statusIcon = libraryItem.has_file ? 'mdi:check-circle' : (libraryItem.monitored ? 'mdi:eye' : 'mdi:eye-off');
         const statusText = libraryItem.has_file ? 'Available' : (libraryItem.monitored ? 'Monitored' : 'Unmonitored');
 
         return `
-          <div class="movie-item ${isCompact ? 'compact' : ''}" style="${backgroundStyle}">
-            <div class="movie-poster">
+          <div class="media-item ${isCompact ? 'compact' : ''}" style="${backgroundStyle}">
+            <div class="item-poster">
               <img src="${libraryItem.images?.poster || ''}" alt="${libraryItem.title}" loading="lazy" />
             </div>
-            <div class="movie-info">
-              <div class="movie-title">${libraryItem.title} ${libraryItem.year ? `(${libraryItem.year})` : ''}</div>
-              <div class="movie-meta">
+            <div class="item-info">
+              <div class="item-title">${libraryItem.title} ${libraryItem.year ? `(${libraryItem.year})` : ''}</div>
+              <div class="item-meta">
                 <span class="status-badge ${statusClass}">
                   <ha-icon icon="${statusIcon}"></ha-icon>
                   ${statusText}
@@ -488,40 +562,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       }
     }).join('');
 
-    const showHeader = this._config.show_search || this._config.show_count || this._config.show_refresh_button;
-
-    const refreshBtnHtml = this._config.show_refresh_button ? `
-      <button class="refresh-btn ${this._loading ? 'loading' : ''}" title="Refresh">
-        <ha-icon icon="mdi:refresh"></ha-icon>
-      </button>
-    ` : '';
-
-    let headerHtml = '';
-    if (showHeader) {
-      if (this._config.show_search || this._config.show_count || this._config.show_refresh_button) {
-        headerHtml = `
-          <div class="card-header">
-            ${this._config.show_search ? `
-            <div class="search-container">
-              <ha-icon icon="mdi:magnify" class="search-icon"></ha-icon>
-              <input type="text" class="search-input" placeholder="Search..." value="${this._searchQuery}" />
-                ${this._searchQuery ? `
-                <button class="search-clear" title="Clear">
-                  <ha-icon icon="mdi:close"></ha-icon>
-                </button>
-              ` : ''}
-      </div>` : '<span></span>'}
-            ${this._config.show_count ? `<span class="count">${this._items.length} item${this._items.length !== 1 ? 's' : ''}</span>` : ''}
-            ${refreshBtnHtml}
-          </div>
-        `;
-      }
-    }
-
-
-
-    // Pagination controls (only show if more than one page)
-    const filteredItems = this._getFilteredItems();
+    // Pagination
     const showPagination = totalPages > 1;
     const paginationHtml = showPagination ? `
       <div class="pagination">
@@ -535,18 +576,18 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       </div>
     ` : '';
 
-    // No results message
+    // No results
     const noResultsHtml = this._searchQuery && filteredItems.length === 0 ? `
       <div class="empty-state">
-        <ha-icon icon="mdi:movie-search"></ha-icon>
+        <ha-icon icon="mdi:magnify-close"></ha-icon>
         <span>No matches for "${this._searchQuery}"</span>
       </div>
     ` : '';
 
     this._content.innerHTML = `
       <ha-card>
-        ${headerHtml}
-        <div class="movies-container">
+        ${this._renderHeader()}
+        <div class="items-container">
           ${noResultsHtml || itemsHtml}
         </div>
         ${paginationHtml}
@@ -556,11 +597,9 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   }
 
   private _attachEventHandlers() {
-    if (this._config.show_refresh_button) {
-      const refreshBtn = this._content.querySelector('.refresh-btn');
-      if (refreshBtn) {
-        refreshBtn.addEventListener('click', () => this._handleRefreshClick());
-      }
+    const refreshBtn = this._content.querySelector('.refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => this._handleRefreshClick());
     }
 
     const prevBtn = this._content.querySelector('.prev-btn');
@@ -572,22 +611,19 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
       nextBtn.addEventListener('click', () => this._handleNextPage());
     }
 
-    // Search handlers
-    if (this._config.show_search) {
-      const searchInput = this._content.querySelector('.search-input') as HTMLInputElement;
-      const searchClear = this._content.querySelector('.search-clear');
+    const searchInput = this._content.querySelector('.search-input') as HTMLInputElement;
+    const searchClear = this._content.querySelector('.search-clear');
 
-      if (searchInput) {
-        searchInput.addEventListener('input', (e) => this._handleSearchInput(e));
-      }
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => this._handleSearchInput(e));
+    }
 
-      if (searchClear) {
-        searchClear.addEventListener('click', () => {
-          this._searchQuery = '';
-          this._currentPage = 0;
-          this._render();
-        });
-      }
+    if (searchClear) {
+      searchClear.addEventListener('click', () => {
+        this._searchQuery = '';
+        this._currentPage = 0;
+        this._render();
+      });
     }
   }
 
@@ -599,19 +635,18 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   }
 }
 
-customElements.define('radarr-queue-card', RadarrQueueCard);
+customElements.define('arr-media-card', RadarrQueueCard);
 
-// Register card for the card picker
 (window as any).customCards = (window as any).customCards || [];
 (window as any).customCards.push({
-  type: 'radarr-queue-card',
-  name: 'Radarr Queue Card',
-  description: 'A custom card to display your Radarr download queue',
+  type: 'arr-media-card',
+  name: 'Arr Media Card',
+  description: 'Display your Radarr/Sonarr download queue or library',
   preview: true,
 });
 
 console.info(
-  '%c RADARR-QUEUE-CARD %c v1.0.0 ',
+  '%c ARR-MEDIA-CARD %c v1.1.0 ',
   'color: white; background: #ff6600; font-weight: bold;',
   'color: #ff6600; background: white; font-weight: bold;'
 );

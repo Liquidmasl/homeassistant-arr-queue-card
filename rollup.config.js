@@ -3,9 +3,9 @@ import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 
 export default {
-  input: 'src/radarr-queue-card.ts',
+  input: 'src/arr-media-card.ts',
   output: {
-    file: 'dist/radarr-queue-card.js',
+    file: 'dist/arr-media-card.js',
     format: 'es',
     sourcemap: false,
   },

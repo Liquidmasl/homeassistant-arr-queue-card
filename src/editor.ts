@@ -1,9 +1,13 @@
 import { HomeAssistant, LovelaceCardConfig } from './types';
 
-interface RadarrQueueCardConfig extends LovelaceCardConfig {
-  service?: string;
-  entry_id?: string;
-  title?: string;
+interface ArrInstanceConfig {
+  entry_id: string;
+}
+
+interface ArrQueueCardConfig extends LovelaceCardConfig {
+  radarr?: ArrInstanceConfig;
+  sonarr?: ArrInstanceConfig;
+  view_mode?: 'queue' | 'library';
   max_items?: number;
   items_per_page?: number;
   show_fanart?: boolean;
@@ -13,8 +17,13 @@ interface RadarrQueueCardConfig extends LovelaceCardConfig {
   show_tracker?: boolean;
   show_download_client?: boolean;
   show_refresh_button?: boolean;
-  view_mode?: 'queue' | 'library';
-  show_search?: boolean;
+}
+
+interface ConfigEntry {
+  entry_id: string;
+  domain: string;
+  title: string;
+  state: string;
 }
 
 const editorStyles = `
@@ -36,6 +45,15 @@ const editorStyles = `
     margin-bottom: 12px;
     color: var(--primary-text-color);
     font-size: 1.1em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .config-section-title .app-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
   }
 
   .config-row {
@@ -137,20 +155,32 @@ const editorStyles = `
   input:checked + .toggle-slider:before {
     transform: translateX(24px);
   }
+
+  .loading-entries {
+    color: var(--secondary-text-color);
+    font-size: 0.85em;
+    padding: 4px 0;
+  }
 `;
 
 export class RadarrQueueCardEditor extends HTMLElement {
-  private _config!: RadarrQueueCardConfig;
+  private _config!: ArrQueueCardConfig;
   private _hass!: HomeAssistant;
+  private _radarrEntries: ConfigEntry[] = [];
+  private _sonarrEntries: ConfigEntry[] = [];
+  private _entriesLoaded = false;
 
   set hass(hass: HomeAssistant) {
+    const hadHass = !!this._hass;
     this._hass = hass;
+    if (!hadHass && hass && !this._entriesLoaded) {
+      this._loadConfigEntries();
+    }
   }
 
-  setConfig(config: RadarrQueueCardConfig) {
+  setConfig(config: ArrQueueCardConfig) {
     this._config = {
       view_mode: 'queue',
-      title: 'Radarr Queue',
       max_items: 50,
       items_per_page: 5,
       show_fanart: true,
@@ -160,10 +190,60 @@ export class RadarrQueueCardEditor extends HTMLElement {
       show_tracker: true,
       show_download_client: true,
       show_refresh_button: false,
-      show_search: false,
       ...config,
     };
     this._render();
+  }
+
+  private async _loadConfigEntries() {
+    if (!this._hass) return;
+
+    try {
+      const entries: ConfigEntry[] = await this._hass.callWS({ type: 'config_entries/get' });
+      this._radarrEntries = entries.filter((e) => e.domain === 'radarr' && e.state === 'loaded');
+      this._sonarrEntries = entries.filter((e) => e.domain === 'sonarr' && e.state === 'loaded');
+      this._entriesLoaded = true;
+      this._render();
+    } catch {
+      this._entriesLoaded = true;
+      this._render();
+    }
+  }
+
+  private _renderAppOptions(app: 'radarr' | 'sonarr', entries: ConfigEntry[]): string {
+    const currentEntryId = this._config[app]?.entry_id || '';
+    const label = app.charAt(0).toUpperCase() + app.slice(1);
+
+    let selectorHtml: string;
+
+    if (!this._entriesLoaded) {
+      selectorHtml = `<span class="loading-entries">Loading...</span>`;
+    } else if (entries.length === 0) {
+      selectorHtml = `<input type="text" id="${app}_entry_id" value="${currentEntryId}" placeholder="No ${label} found - enter ID" />`;
+    } else {
+      const options = entries.map((e) =>
+        `<option value="${e.entry_id}" ${e.entry_id === currentEntryId ? 'selected' : ''}>${e.title}</option>`
+      ).join('');
+
+      selectorHtml = `
+        <select id="${app}_entry_id">
+          <option value="" ${!currentEntryId ? 'selected' : ''}>Disabled</option>
+          ${options}
+        </select>
+      `;
+    }
+
+    return `
+      <div class="config-row">
+        <div class="config-label">
+          <span class="config-label-text">${label} Instance</span>
+          <span class="config-label-description">Select your ${label} integration</span>
+        </div>
+        <div class="config-input">
+          ${selectorHtml}
+        </div>
+      </div>
+    `;
   }
 
   private _render() {
@@ -173,17 +253,9 @@ export class RadarrQueueCardEditor extends HTMLElement {
       <style>${editorStyles}</style>
       <div class="card-config">
         <div class="config-section">
-          <div class="config-section-title">Required</div>
-
-          <div class="config-row">
-            <div class="config-label">
-              <span class="config-label-text">Entry ID</span>
-              <span class="config-label-description">Radarr integration entry ID</span>
-            </div>
-            <div class="config-input">
-              <input type="text" id="entry_id" value="${this._config.entry_id || ''}" placeholder="e.g., abc123..." />
-            </div>
-          </div>
+          <div class="config-section-title">Integrations</div>
+          ${this._renderAppOptions('radarr', this._radarrEntries)}
+          ${this._renderAppOptions('sonarr', this._sonarrEntries)}
         </div>
 
         <div class="config-section">
@@ -197,18 +269,8 @@ export class RadarrQueueCardEditor extends HTMLElement {
             <div class="config-input">
               <select id="view_mode">
                 <option value="queue" ${this._config.view_mode === 'queue' ? 'selected' : ''}>Download Queue</option>
-                <option value="library" ${this._config.view_mode === 'library' ? 'selected' : ''}>Movie Library</option>
+                <option value="library" ${this._config.view_mode === 'library' ? 'selected' : ''}>Library</option>
               </select>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <div class="config-label">
-              <span class="config-label-text">Title</span>
-              <span class="config-label-description">Card title text</span>
-            </div>
-            <div class="config-input">
-              <input type="text" id="title" value="${this._config.title || ''}" placeholder="Radarr Queue" />
             </div>
           </div>
         </div>
@@ -262,7 +324,7 @@ export class RadarrQueueCardEditor extends HTMLElement {
           <div class="config-row">
             <div class="config-label">
               <span class="config-label-text">Show Fanart</span>
-              <span class="config-label-description">Display movie fanart as background</span>
+              <span class="config-label-description">Display fanart as background</span>
             </div>
             <div class="config-input">
               <label class="toggle-switch">
@@ -275,7 +337,6 @@ export class RadarrQueueCardEditor extends HTMLElement {
 
         <div class="config-section">
           <div class="config-section-title">Header Options</div>
-
 
           <div class="config-row">
             <div class="config-label">
@@ -302,23 +363,10 @@ export class RadarrQueueCardEditor extends HTMLElement {
               </label>
             </div>
           </div>
-
-          <div class="config-row">
-            <div class="config-label">
-              <span class="config-label-text">Show Search</span>
-              <span class="config-label-description">Display search bar to filter items</span>
-            </div>
-            <div class="config-input">
-              <label class="toggle-switch">
-                <input type="checkbox" id="show_search" ${this._config.show_search ? 'checked' : ''} />
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
         </div>
 
         <div class="config-section">
-          <div class="config-section-title">Queue Mode Options</div>
+          <div class="config-section-title">Queue Options</div>
 
           <div class="config-row">
             <div class="config-label">
@@ -346,20 +394,6 @@ export class RadarrQueueCardEditor extends HTMLElement {
             </div>
           </div>
         </div>
-
-        <div class="config-section">
-          <div class="config-section-title">Advanced</div>
-
-          <div class="config-row">
-            <div class="config-label">
-              <span class="config-label-text">Service Override</span>
-              <span class="config-label-description">Custom service (leave empty for auto)</span>
-            </div>
-            <div class="config-input">
-              <input type="text" id="service" value="${this._config.service || ''}" placeholder="radarr.get_queue" />
-            </div>
-          </div>
-        </div>
       </div>
     `;
 
@@ -367,14 +401,18 @@ export class RadarrQueueCardEditor extends HTMLElement {
   }
 
   private _attachEventListeners() {
-    // Text inputs
-    const textInputs = ['entry_id', 'title', 'service'];
-    textInputs.forEach((id) => {
-      const input = this.querySelector(`#${id}`) as HTMLInputElement;
-      if (input) {
-        input.addEventListener('change', (e) => {
-          const target = e.target as HTMLInputElement;
-          this._updateConfig(id, target.value || undefined);
+    // App instance selectors (could be select or text input)
+    ['radarr', 'sonarr'].forEach((app) => {
+      const el = this.querySelector(`#${app}_entry_id`) as HTMLSelectElement | HTMLInputElement;
+      if (el) {
+        el.addEventListener('change', (e) => {
+          const target = e.target as HTMLSelectElement | HTMLInputElement;
+          const value = target.value;
+          if (value) {
+            this._updateConfig(app, { entry_id: value });
+          } else {
+            this._updateConfig(app, undefined);
+          }
         });
       }
     });
@@ -406,7 +444,6 @@ export class RadarrQueueCardEditor extends HTMLElement {
       'show_fanart',
       'show_count',
       'show_refresh_button',
-      'show_search',
       'show_tracker',
       'show_download_client',
     ];
@@ -422,7 +459,7 @@ export class RadarrQueueCardEditor extends HTMLElement {
   }
 
   private _updateConfig(key: string, value: any) {
-    if (value === undefined || value === '') {
+    if (value === undefined) {
       const newConfig = { ...this._config };
       delete (newConfig as any)[key];
       this._config = newConfig;
@@ -433,7 +470,6 @@ export class RadarrQueueCardEditor extends HTMLElement {
       };
     }
 
-    // Dispatch config change event
     const event = new CustomEvent('config-changed', {
       detail: { config: this._config },
       bubbles: true,
@@ -443,4 +479,4 @@ export class RadarrQueueCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('radarr-queue-card-editor', RadarrQueueCardEditor);
+customElements.define('arr-media-card-editor', RadarrQueueCardEditor);

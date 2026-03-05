@@ -1,9 +1,9 @@
 {
-  "name": "radarr-queue-card",
+  "name": "media-carrd",
   "version": "1.0.0",
   "type": "module",
-  "description": "A custom Lovelace card for Home Assistant to display Radarr queue",
-  "main": "dist/radarr-queue-card.js",
+  "description": "A custom Lovelace card for Home Assistant to display Radarr and Sonarr queues and libraries",
+  "main": "dist/arr-media-card.js",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c --watch",
