@@ -57,14 +57,33 @@ interface LibraryItem {
   year: number;
   status: string;
   monitored: boolean;
-  has_file: boolean;
-  size_on_disk: number;
-  path: string;
+  // Radarr-specific
+  has_file?: boolean;
+  size_on_disk?: number | null;
+  path?: string;
+  // Sonarr-specific
+  episode_file_count?: number;
+  episode_count?: number;
+  episodes_info?: string;
   images: {
     poster: string;
     fanart: string;
   };
   _source?: 'radarr' | 'sonarr';
+  _entry_id?: string;
+}
+
+interface EpisodeItem {
+  id: number;
+  series_id: number;
+  season_number: number;
+  episode_number: number;
+  episode_identifier: string;
+  title: string;
+  has_file: boolean;
+  monitored: boolean;
+  runtime: number;
+  air_date: string;
 }
 
 type MediaItem = QueueItem | LibraryItem;
@@ -76,7 +95,7 @@ const SERVICE_MAP: Record<string, Record<string, string>> = {
 
 const RESPONSE_KEY_MAP: Record<string, Record<string, string>> = {
   radarr: { queue: 'movies', library: 'movies' },
-  sonarr: { queue: 'shows', library: 'series' },
+  sonarr: { queue: 'shows', library: 'shows' },
 };
 
 
@@ -92,6 +111,10 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   private _rendered = false;
   private _currentPage = 0;
   private _searchQuery = '';
+  private _expandedSeries = new Set<number>();
+  private _seriesEpisodes = new Map<number, EpisodeItem[]>();
+  private _loadingEpisodes = new Set<number>();
+  private _expandedSeasons = new Map<number, Set<number>>();
 
   static getConfigElement() {
     return document.createElement('arr-media-card-editor');
@@ -100,7 +123,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   static getStubConfig() {
     return {
       view_mode: 'queue',
-      max_items: 50,
+      max_items: 500,
       items_per_page: 5,
       show_fanart: true,
       compact_mode: false,
@@ -128,7 +151,7 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   setConfig(config: ArrQueueCardConfig) {
     this._config = {
       view_mode: 'queue',
-      max_items: 50,
+      max_items: 500,
       items_per_page: 5,
       show_fanart: true,
       compact_mode: false,
@@ -210,9 +233,13 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     const data = response?.response?.[responseKey];
     if (!data) return [];
 
-    const items = Object.values(data) as MediaItem[];
-    // Tag each item with its source
-    items.forEach((item) => { (item as any)._source = app; });
+    const items = Object.entries(data).map(([key, value]) => {
+      const item = value as any;
+      if (!item.title) item.title = key;
+      item._source = app;
+      item._entry_id = entryId;
+      return item as MediaItem;
+    });
     return items;
   }
 
@@ -246,8 +273,9 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
         apps.map(({ app, entry_id }) => this._fetchFromApp(app, entry_id))
       );
 
-      // Merge and limit
-      this._items = results.flat().slice(0, this._config.max_items) as MediaItem[];
+      // Merge with per-source limit so one source can't crowd out the other
+      const maxPerSource = Math.ceil((this._config.max_items || 50) / apps.length);
+      this._items = results.map(r => r.slice(0, maxPerSource)).flat() as MediaItem[];
       this._loading = false;
       this._error = null;
     } catch (err) {
@@ -293,6 +321,82 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
   private _handleRefreshClick() {
     this._lastFetch = 0; // Reset throttle so refresh works immediately
     this._fetchData();
+  }
+
+  private async _fetchEpisodes(entryId: string, seriesId: number): Promise<EpisodeItem[]> {
+    const response = await this._hass.callService(
+      'sonarr',
+      'get_episodes',
+      { entry_id: entryId, series_id: seriesId },
+      undefined,
+      undefined,
+      true
+    );
+    const data = response?.response?.['episodes'];
+    if (!data) return [];
+    return Object.values(data) as EpisodeItem[];
+  }
+
+  private async _handleSeriesExpand(seriesId: number, entryId: string) {
+    const btn = this._content.querySelector(`.expand-btn[data-series-id="${seriesId}"]`) as HTMLElement;
+    const mediaItem = btn?.closest('.media-item') as HTMLElement;
+
+    if (this._expandedSeries.has(seriesId)) {
+      this._expandedSeries.delete(seriesId);
+      this._content.querySelector(`.episodes-container[data-series-id="${seriesId}"]`)?.remove();
+      btn?.querySelector('ha-icon')?.setAttribute('icon', 'mdi:chevron-down');
+      return;
+    }
+
+    this._expandedSeries.add(seriesId);
+    btn?.querySelector('ha-icon')?.setAttribute('icon', 'mdi:chevron-up');
+
+    if (!this._seriesEpisodes.has(seriesId)) {
+      this._loadingEpisodes.add(seriesId);
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'episodes-container';
+      loadingDiv.dataset.seriesId = String(seriesId);
+      loadingDiv.innerHTML = `<div class="episodes-loading"><ha-icon icon="mdi:loading" class="spin"></ha-icon><span>Loading episodes...</span></div>`;
+      mediaItem?.insertAdjacentElement('afterend', loadingDiv);
+
+      try {
+        const episodes = await this._fetchEpisodes(entryId, seriesId);
+        this._seriesEpisodes.set(seriesId, episodes);
+        const seasonNums = new Set(episodes.map(ep => ep.season_number));
+        const expanded = new Set<number>();
+        if (seasonNums.size <= 1) seasonNums.forEach(s => expanded.add(s));
+        this._expandedSeasons.set(seriesId, expanded);
+        const container = this._content.querySelector(`.episodes-container[data-series-id="${seriesId}"]`);
+        if (container) {
+          container.innerHTML = this._renderEpisodesBySeason(episodes, seriesId);
+          this._attachSeasonHandlers(container);
+        }
+      } catch {
+        this._seriesEpisodes.set(seriesId, []);
+        const container = this._content.querySelector(`.episodes-container[data-series-id="${seriesId}"]`);
+        if (container) container.innerHTML = `<div class="episodes-empty">Failed to load episodes</div>`;
+      } finally {
+        this._loadingEpisodes.delete(seriesId);
+      }
+    } else {
+      const container = document.createElement('div');
+      container.className = 'episodes-container';
+      container.dataset.seriesId = String(seriesId);
+      container.innerHTML = this._renderEpisodesBySeason(this._seriesEpisodes.get(seriesId)!, seriesId);
+      mediaItem?.insertAdjacentElement('afterend', container);
+      this._attachSeasonHandlers(container);
+    }
+  }
+
+  private _attachSeasonHandlers(container: Element) {
+    container.querySelectorAll('.season-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const el = header as HTMLElement;
+        const seriesId = parseInt(el.dataset.seriesId || '');
+        const seasonNum = parseInt(el.dataset.seasonNum ?? '');
+        if (!isNaN(seriesId) && !isNaN(seasonNum)) this._handleSeasonToggle(seriesId, seasonNum);
+      });
+    });
   }
 
   private _handlePrevPage() {
@@ -346,6 +450,142 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
 
   private _isQueueItem(item: MediaItem): item is QueueItem {
     return 'progress' in item && 'download_client' in item;
+  }
+
+  private _renderSonarrSeriesItem(item: LibraryItem, isCompact: boolean | undefined, backgroundStyle: string): string {
+    const isExpanded = this._expandedSeries.has(item.id);
+    const isLoadingEps = this._loadingEpisodes.has(item.id);
+    const episodes = this._seriesEpisodes.get(item.id);
+
+    const seriesStatusClass = item.status === 'continuing' ? 'status-downloading' : 'status-available';
+    const seriesStatusIcon = item.status === 'continuing' ? 'mdi:television-play' : 'mdi:check-circle';
+    const monitoredClass = item.monitored ? 'status-monitored' : 'status-unmonitored';
+    const monitoredIcon = item.monitored ? 'mdi:eye' : 'mdi:eye-off';
+
+    let episodesContent = '';
+    if (isExpanded) {
+      if (isLoadingEps) {
+        episodesContent = `
+          <div class="episodes-container" data-series-id="${item.id}">
+            <div class="episodes-loading">
+              <ha-icon icon="mdi:loading" class="spin"></ha-icon>
+              <span>Loading episodes...</span>
+            </div>
+          </div>`;
+      } else if (episodes) {
+        episodesContent = `<div class="episodes-container" data-series-id="${item.id}">${this._renderEpisodesBySeason(episodes, item.id)}</div>`;
+      }
+    }
+
+    return `
+      <div class="media-item ${isCompact ? 'compact' : ''}" style="${backgroundStyle}">
+        <div class="item-poster">
+          <img src="${item.images?.poster || ''}" alt="${item.title}" loading="lazy" />
+        </div>
+        <div class="item-info">
+          <div class="item-title">${item.title} ${item.year ? `(${item.year})` : ''}</div>
+          <div class="item-meta">
+            <span class="status-badge ${seriesStatusClass}">
+              <ha-icon icon="${seriesStatusIcon}"></ha-icon>
+              ${item.status}
+            </span>
+            <span class="status-badge ${monitoredClass}">
+              <ha-icon icon="${monitoredIcon}"></ha-icon>
+              ${item.monitored ? 'Monitored' : 'Unmonitored'}
+            </span>
+            ${item.episodes_info ? `
+              <span class="episodes-info">
+                <ha-icon icon="mdi:television"></ha-icon>
+                ${item.episodes_info}
+              </span>` : ''}
+          </div>
+        </div>
+        <button class="expand-btn" data-series-id="${item.id}" data-entry-id="${item._entry_id}" title="${isExpanded ? 'Collapse' : 'Expand episodes'}">
+          <ha-icon icon="mdi:chevron-${isExpanded ? 'up' : 'down'}"></ha-icon>
+        </button>
+      </div>
+      ${episodesContent}
+    `;
+  }
+
+  private _renderEpisodesBySeason(episodes: EpisodeItem[], seriesId: number): string {
+    if (episodes.length === 0) {
+      return `<div class="episodes-empty">No episodes found</div>`;
+    }
+
+    const seasons = new Map<number, EpisodeItem[]>();
+    for (const ep of episodes) {
+      if (!seasons.has(ep.season_number)) seasons.set(ep.season_number, []);
+      seasons.get(ep.season_number)!.push(ep);
+    }
+
+    const expandedSeasons = this._expandedSeasons.get(seriesId) ?? new Set<number>();
+
+    return [...seasons.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([seasonNum, eps]) => {
+        const isSeasonExpanded = expandedSeasons.has(seasonNum);
+        const seasonLabel = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
+        const available = eps.filter(ep => ep.has_file).length;
+        const total = eps.length;
+
+        const epRows = isSeasonExpanded ? [...eps]
+          .sort((a, b) => a.episode_number - b.episode_number)
+          .map(ep => `
+            <div class="episode-row ${!ep.monitored ? 'unmonitored' : ''}">
+              <span class="ep-identifier">${ep.episode_identifier}</span>
+              <span class="ep-title">${ep.title}</span>
+              <ha-icon icon="${ep.has_file ? 'mdi:check-circle' : 'mdi:circle-outline'}" class="ep-status-icon ${ep.has_file ? 'ep-available' : 'ep-missing'}"></ha-icon>
+            </div>
+          `).join('') : '';
+
+        return `
+          <div class="season-group">
+            <div class="season-header" data-series-id="${seriesId}" data-season-num="${seasonNum}">
+              <span class="season-label">${seasonLabel}</span>
+              <span class="season-count">${available}/${total}</span>
+              <ha-icon icon="mdi:chevron-${isSeasonExpanded ? 'up' : 'down'}" class="season-chevron"></ha-icon>
+            </div>
+            ${isSeasonExpanded ? `<div class="season-episodes">${epRows}</div>` : ''}
+          </div>`;
+      }).join('');
+  }
+
+  private _handleSeasonToggle(seriesId: number, seasonNum: number) {
+    if (!this._expandedSeasons.has(seriesId)) {
+      this._expandedSeasons.set(seriesId, new Set());
+    }
+    const expanded = this._expandedSeasons.get(seriesId)!;
+
+    const header = this._content.querySelector(
+      `.season-header[data-series-id="${seriesId}"][data-season-num="${seasonNum}"]`
+    ) as HTMLElement;
+    if (!header) return;
+
+    const seasonGroup = header.parentElement!;
+    const chevron = header.querySelector('.season-chevron') as HTMLElement;
+
+    if (expanded.has(seasonNum)) {
+      expanded.delete(seasonNum);
+      seasonGroup.querySelector('.season-episodes')?.remove();
+      chevron?.setAttribute('icon', 'mdi:chevron-down');
+    } else {
+      expanded.add(seasonNum);
+      const episodes = this._seriesEpisodes.get(seriesId) ?? [];
+      const div = document.createElement('div');
+      div.className = 'season-episodes';
+      div.innerHTML = [...episodes.filter(ep => ep.season_number === seasonNum)]
+        .sort((a, b) => a.episode_number - b.episode_number)
+        .map(ep => `
+          <div class="episode-row ${!ep.monitored ? 'unmonitored' : ''}">
+            <span class="ep-identifier">${ep.episode_identifier}</span>
+            <span class="ep-title">${ep.title}</span>
+            <ha-icon icon="${ep.has_file ? 'mdi:check-circle' : 'mdi:circle-outline'}" class="ep-status-icon ${ep.has_file ? 'ep-available' : 'ep-missing'}"></ha-icon>
+          </div>
+        `).join('');
+      seasonGroup.appendChild(div);
+      chevron?.setAttribute('icon', 'mdi:chevron-up');
+    }
   }
 
   private _handleSearchInput(e: Event) {
@@ -533,6 +773,11 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
         `;
       } else {
         const libraryItem = item as LibraryItem;
+
+        if (libraryItem._source === 'sonarr') {
+          return this._renderSonarrSeriesItem(libraryItem, isCompact, backgroundStyle);
+        }
+
         const statusClass = libraryItem.has_file ? 'status-available' : (libraryItem.monitored ? 'status-monitored' : 'status-unmonitored');
         const statusIcon = libraryItem.has_file ? 'mdi:check-circle' : (libraryItem.monitored ? 'mdi:eye' : 'mdi:eye-off');
         const statusText = libraryItem.has_file ? 'Available' : (libraryItem.monitored ? 'Monitored' : 'Unmonitored');
@@ -549,10 +794,10 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
                   <ha-icon icon="${statusIcon}"></ha-icon>
                   ${statusText}
                 </span>
-                ${libraryItem.size_on_disk > 0 ? `
+                ${libraryItem.size_on_disk ? `
                   <span class="file-size">
                     <ha-icon icon="mdi:harddisk"></ha-icon>
-                    ${this._formatSize(libraryItem.size_on_disk)}
+                    ${this._formatSize(libraryItem.size_on_disk!)}
                   </span>
                 ` : ''}
               </div>
@@ -610,6 +855,18 @@ class RadarrQueueCard extends HTMLElement implements LovelaceCard {
     if (nextBtn) {
       nextBtn.addEventListener('click', () => this._handleNextPage());
     }
+
+    this._attachSeasonHandlers(this._content);
+
+    this._content.querySelectorAll('.expand-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const el = btn as HTMLElement;
+        const seriesId = parseInt(el.dataset.seriesId || '0');
+        const entryId = el.dataset.entryId || '';
+        if (seriesId) this._handleSeriesExpand(seriesId, entryId);
+      });
+    });
 
     const searchInput = this._content.querySelector('.search-input') as HTMLInputElement;
     const searchClear = this._content.querySelector('.search-clear');

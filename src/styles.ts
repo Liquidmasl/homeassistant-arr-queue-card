@@ -401,6 +401,11 @@ export const styles = `
     to { transform: rotate(360deg); }
   }
 
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
   .spin {
     animation: spin 1s linear infinite;
   }
@@ -449,5 +454,159 @@ export const styles = `
     color: var(--secondary-text-color);
     min-width: 50px;
     text-align: center;
+  }
+
+  /* Sonarr series expand button */
+  .expand-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--secondary-text-color);
+    transition: color 0.2s ease, background-color 0.2s ease;
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  .expand-btn:hover {
+    color: var(--primary-text-color);
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .expand-btn ha-icon {
+    --mdc-icon-size: 20px;
+  }
+
+  /* Episodes meta tag */
+  .episodes-info {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75em;
+    color: var(--secondary-text-color);
+  }
+
+  .episodes-info ha-icon {
+    --mdc-icon-size: 14px;
+  }
+
+  /* Episodes container (below expanded series row) */
+  .episodes-container {
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.05));
+    animation: slideDown 0.2s ease;
+  }
+
+  .episodes-loading,
+  .episodes-empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    color: var(--secondary-text-color);
+    font-size: 0.85em;
+  }
+
+  /* Season groups */
+  .season-group {
+    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.05));
+  }
+
+  .season-group:last-child {
+    border-bottom: none;
+  }
+
+  .season-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px 5px 16px;
+    font-size: 0.7em;
+    font-weight: 700;
+    color: var(--arr-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.05));
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s ease;
+  }
+
+  .season-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .season-label {
+    flex: 1;
+  }
+
+  .season-count {
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--secondary-text-color);
+    opacity: 0.8;
+  }
+
+  .season-chevron {
+    --mdc-icon-size: 16px;
+    color: var(--secondary-text-color);
+    opacity: 0.6;
+    transition: transform 0.2s ease;
+  }
+
+  .season-episodes {
+    animation: slideDown 0.18s ease;
+  }
+
+  /* Episode rows */
+  .episode-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 16px 5px 24px;
+    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.03));
+  }
+
+  .episode-row:last-child {
+    border-bottom: none;
+  }
+
+  .episode-row.unmonitored {
+    opacity: 0.45;
+  }
+
+  .ep-identifier {
+    font-size: 0.72em;
+    font-weight: 600;
+    color: var(--secondary-text-color);
+    flex-shrink: 0;
+    min-width: 52px;
+  }
+
+  .ep-title {
+    flex: 1;
+    font-size: 0.8em;
+    color: var(--primary-text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ep-status-icon {
+    flex-shrink: 0;
+    --mdc-icon-size: 16px;
+  }
+
+  .ep-available {
+    color: var(--status-available);
+  }
+
+  .ep-missing {
+    color: var(--secondary-text-color);
+    opacity: 0.35;
   }
 `;
