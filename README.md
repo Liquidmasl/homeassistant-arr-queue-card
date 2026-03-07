@@ -116,8 +116,11 @@ show_refresh_button: true
 **Library Mode** (`view_mode: library`):
 - Shows items in your library
 - Displays availability status, year, and file size
+- Sonarr series are expandable — browse episodes grouped by season with availability counts
 
-![Library Mode](.github/assets/library-mode.png)
+| Radarr Library | Sonarr Library |
+|:---:|:---:|
+| ![Radarr Library Mode](.github/assets/library-mode.png) | ![Sonarr Library Mode](.github/assets/sonarr-library.png) |
 
 ### Finding Your Entry ID
 
