@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.4]
+
 ### ⚠️ ACTION REQUIRED — You are might not receiving updates anymore
 
 This repository was renamed. HACS does **not** follow repository renames/redirects the way i though.. sorry. 
