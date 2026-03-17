@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.0]
 
 Search bar can now be hidden via the card editor.
 
