@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   hacs:
@@ -12,7 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check if version bump commit
+        id: check
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          if [[ "$MSG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: HACS validation
+        if: steps.check.outputs.skip != 'true'
         uses: hacs/action@22.5.0
         with:
           category: plugin
