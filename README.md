@@ -5,6 +5,16 @@
 ![Stars](https://img.shields.io/github/stars/Liquidmasl/lovelace-arr-media-carrd)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)
 
+> [!WARNING]
+> **This repository was renamed.** If you installed this card via HACS using the old repository URL (`Liquidmasl/homeassistant-arr-queue-card`), you might be missing out on updates. Even if updates appear in HACS, the cards might not update, because the old version is kept side by side.
+>
+> **You will not see this warning inside Home Assistant** — HACS silently keeps serving the old version with no indication that updates exist.
+>
+> **To fix:** In HACS, remove the old repository entry and add the new one: `Liquidmasl/lovelace-arr-media-carrd`. To be sure also check the dashboard resources; in my case the old and new version where in there side by side.
+> The Arr Media Carrd should only show up once in the browser console, with version larger then 1.3.3.
+>
+> Super sorry for the invonvenience..  
+
 A custom Lovelace card for Home Assistant that displays your Radarr and Sonarr download queues and libraries in a beautiful, modern interface.
 
 | Queue Mode | Library Mode |

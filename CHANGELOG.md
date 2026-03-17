@@ -2,7 +2,66 @@
 
 ## [Unreleased]
 
+### ⚠️ ACTION REQUIRED — You are might not receiving updates anymore
+
+This repository was renamed. HACS does **not** follow repository renames/redirects the way i though.. sorry. 
+It silently keeps your old installation frozen at whatever version you had, and adds the new one as additional resource. So even if HACS updates are made, the card in your UI might just not update.
+Check you browser console, the Arr Media Carrd should only show up once (with a version higher then 1.3.3).
+
+**If you installed via HACS (custom repository):**
+
+1. In HACS → Frontend, remove the old entry (`homeassistant-arr-queue-card`)
+2. Add the new repository: `Liquidmasl/lovelace-arr-media-carrd`
+3. Install and do a hard refresh
+
+**If you installed manually:** update your resource URL from `arr-media-card.js` to `arr-media-carrd.js`.
+
+---
+
+The rename itself: the card is now called `arr-media-carrd` (yes, two r's — HACS requires the JS filename to match the repository name, so here we arrr). The old element type `type: custom:arr-media-card` still works but logs a deprecation warning in the browser console. It will be removed in a future major version.
+
+<details>
+<summary>Changes</summary>
+
+- Repository renamed from `homeassistant-arr-queue-card` to `lovelace-arr-media-carrd`
+- JS file renamed from `arr-media-card.js` to `arr-media-carrd.js`
+- Primary element type is now `arr-media-carrd` (note the extra r before the d)
+- Old element type `arr-media-card` kept as a deprecated alias with a console warning
+- Editor element renamed to `arr-media-carrd-editor` internally
+
+</details>
+
+
 ## [1.3.3]
+
+### ⚠️ ACTION REQUIRED — You are probably not receiving updates anymore
+
+This repository was renamed. HACS does **not** follow repository renames the way i though.. sorry. 
+It silently keeps your old installation frozen at whatever version you had, and adds the new one as additional resource. So even if HACS updates are made, the card in your UI might just not adapt.
+Check you browser console, the Arr Media Carrd should only show up once!
+
+**If you installed via HACS (custom repository):**
+
+1. In HACS → Frontend, remove the old entry (`homeassistant-arr-queue-card`)
+2. Add the new repository: `Liquidmasl/lovelace-arr-media-carrd`
+3. Install and do a hard refresh
+
+**If you installed manually:** update your resource URL from `arr-media-card.js` to `arr-media-carrd.js`.
+
+---
+
+The rename itself: the card is now called `arr-media-carrd` (yes, two r's — HACS requires the JS filename to match the repository name, so here we arrr). The old element type `type: custom:arr-media-card` still works but logs a deprecation warning in the browser console. It will be removed in a future major version.
+
+<details>
+<summary>Changes</summary>
+
+- Repository renamed from `homeassistant-arr-queue-card` to `lovelace-arr-media-carrd`
+- JS file renamed from `arr-media-card.js` to `arr-media-carrd.js`
+- Primary element type is now `arr-media-carrd` (note the extra r before the d)
+- Old element type `arr-media-card` kept as a deprecated alias with a console warning
+- Editor element renamed to `arr-media-carrd-editor` internally
+
+</details>
 
 ## [1.3.2]
 

@@ -9,6 +9,7 @@
     "watch": "rollup -c --watch",
     "lint": "eslint src/**/*.ts",
     "prepare": "npm run build",
+    "preversion": "node -e \"const fs=require('fs');const c=fs.readFileSync('CHANGELOG.md','utf8');const after=c.split('## [Unreleased]')[1];if(!after||!after.split('## [')[0].trim()){console.error('\\nERROR: [Unreleased] section in CHANGELOG.md is empty. Add your changes before bumping the version.\\n');process.exit(1);}\"",
     "version": "node -e \"const fs=require('fs');const v=process.env.npm_package_version;const c=fs.readFileSync('CHANGELOG.md','utf8');fs.writeFileSync('CHANGELOG.md',c.replace('## [Unreleased]','## [Unreleased]\\n\\n## ['+v+']'));\" && git add CHANGELOG.md"
   },
   "keywords": [
