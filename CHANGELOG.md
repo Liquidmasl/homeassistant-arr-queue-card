@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.5]
+
 ### ⚠️ Check your dashboard resources after updating
 
 This repository was renamed, which causes HACS to add a **duplicate resource entry** in your dashboard. Both the old (`arr-media-card.js`) and new (`arr-media-carrd.js`) files end up loaded side by side, and depending on load order the wrong version may be displayed.
