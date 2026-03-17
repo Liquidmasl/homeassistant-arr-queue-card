@@ -26,6 +26,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: HACS validation
+        uses: hacs/action@22.5.0
+        with:
+          category: plugin
+
       - name: Extract changelog section
         id: changelog
         run: |
